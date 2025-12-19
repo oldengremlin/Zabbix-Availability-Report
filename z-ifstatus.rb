@@ -265,8 +265,8 @@ begin
 
       # Повідомляємо про будь-яку зміну хоста
       change = old_status ? "(#{old_status} → #{new_status})" : "(новий)"
-      report_lines << "\n#{'=' * 80}"
-      report_lines << "\nHOST #{host_name.ljust(25)} => #{new_status} #{change} @ #{host_ts.strftime('%Y-%m-%d %H:%M:%S')}"
+      # report_lines << "\n#{'=' * 80}"
+      # report_lines << "\nHOST #{host_name.ljust(25)} => #{new_status} #{change} @ #{host_ts.strftime('%Y-%m-%d %H:%M:%S')}"
 
       # АНАЛІЗ ТІЛЬКИ ПРИ ПАДІННІ (новий статус DOWN)
       if new_status == 'DOWN'
@@ -313,6 +313,10 @@ begin
           report_lines << " (показано #{count} змін)" if count > 0
           report_lines << " (немає змін у цьому інтервалі)" if count == 0
         end
+      else
+        report_lines << "\n#{'=' * 80}"
+        report_lines << "ВІДНОВЛЕННЯ: #{host_name} зміна статусу на UP об #{host_ts.strftime('%Y-%m-%d %H:%M:%S')}"
+        report_lines << "#{'=' * 80}"
       end
       details = report_lines.join("\n")
       db.execute("INSERT INTO event_log (timestamp, host_name, event_type, details) VALUES (?, ?, ?, ?)", [ch[:ts], host_name, event_type, details])
@@ -344,10 +348,11 @@ begin
     report = []
     report << "Звіт про доступність мережі"
     report << "Період: #{Time.at(events.first[0]).strftime('%Y-%m-%d %H:%M')} — #{Time.at(events.last[0]).strftime('%Y-%m-%d %H:%M')}"
-    report << "=" * 80
-    report << ""
+    # report << ""
+    # report << "=" * 80
+    # report << ""
     events.each do |ev|
-      report << "[#{Time.at(ev[0]).strftime('%Y-%m-%d %H:%M:%S')}] #{ev[2]}: #{ev[1]}"
+      # report << "[#{Time.at(ev[0]).strftime('%Y-%m-%d %H:%M:%S')}] #{ev[2]}: #{ev[1]}"
       report << ev[3]
       report << "-" * 80
     end
