@@ -474,12 +474,25 @@ begin
             count += 1
             report_lines << " #{row[2]} → #{row[1].ljust(6)} | #{row[0]}"
           end
-          report_lines << " (показано #{count} #{Ukrainian.pluralize(count, 'зміна', 'зміни', 'змін')})" if count > 0
+          report_lines << " (показано #{count} #{Ukrainian.pluralize(count, 'зміну', 'зміни', 'змін')})" if count > 0
           report_lines << " (немає змін у цьому інтервалі)" if count == 0
         end
       else
+        down_ts = db.get_first_value("SELECT MAX(timestamp) FROM event_log WHERE host_name = ? AND event_type = 'HOST_DOWN' AND timestamp < ?", [host_name, ch[:ts]])
+        down_ts ||= 0 # якщо немає попереднього UP — показуємо всі зміни
+
         report_lines << "\n#{'=' * 80}"
         report_lines << "ВІДНОВЛЕННЯ: #{host_name} — #{host_ts.strftime('%Y-%m-%d %H:%M:%S')}"
+
+        if down_ts == 0
+          report_lines << "        Попередній стан DOWN не зафіксовано (перше відновлення або очищений лог)"
+        else
+          duration_seconds = ch[:ts] - down_ts
+          duration_human = human_duration(duration_seconds)
+          report_lines << "        Аварійна ситуація тривала: #{duration_human}"
+          report_lines << "        (з #{Time.at(down_ts).strftime('%Y-%m-%d %H:%M:%S')} по #{host_ts.strftime('%Y-%m-%d %H:%M:%S')})"
+        end
+
         report_lines << "#{'=' * 80}"
       end
       details = report_lines.join("\n")
