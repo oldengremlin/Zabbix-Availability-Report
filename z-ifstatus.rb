@@ -20,8 +20,8 @@ OptionParser.new do |opts|
   opts.on('--show-all', 'Показати поточний стан всіх хостів та інтерфейсів') { options[:show_all] = true }
   opts.on('--since TIME', 'Показати зміни за період (наприклад: 1h, 30m, 2d)') { |t| options[:since] = t }
   opts.on('--show-diff-count', 'Показати кількість змін у підсумку') { options[:diff_count] = true }
-  opts.on('--always-update', 'Завжди оновлювати інформацію по інтерфейсу') { options[:always_update] = true }
-  opts.on('--snmp-status', 'Завжди оновлювати інформацію по інтерфейсу') { options[:snmp_status] = true }
+  opts.on('--always-update', 'Завжди оновлювати timestamp інтерфейсів (навіть без зміни статусу)') { options[:always_update] = true }
+  opts.on('--snmp-status', 'Використовувати SNMP-доступність замість ICMP для статусу хоста') { options[:snmp_status] = true }
   opts.on('--quiet', 'Тихий режим: мінімальний вивід') { options[:quiet] = true }
   opts.on('--analyze-accessibility', 'Аналіз: деталі по інтерфейсах при зміні статусу хоста') { options[:analyze] = true }
   opts.on('--analyze-accessibility-small', 'Компактний аналіз: тільки остання UP/DOWN по інтерфейсах') { options[:analyze_small] = true }
