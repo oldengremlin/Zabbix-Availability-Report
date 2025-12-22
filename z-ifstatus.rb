@@ -20,6 +20,8 @@ OptionParser.new do |opts|
   opts.on('--show-all', 'Показати поточний стан всіх хостів та інтерфейсів') { options[:show_all] = true }
   opts.on('--since TIME', 'Показати зміни за період (наприклад: 1h, 30m, 2d)') { |t| options[:since] = t }
   opts.on('--show-diff-count', 'Показати кількість змін у підсумку') { options[:diff_count] = true }
+  opts.on('--always-update', 'Завжди оновлювати інформацію по інтерфейсу') { options[:always_update] = true }
+  opts.on('--snmp-status', 'Завжди оновлювати інформацію по інтерфейсу') { options[:snmp_status] = true }
   opts.on('--quiet', 'Тихий режим: мінімальний вивід') { options[:quiet] = true }
   opts.on('--analyze-accessibility', 'Аналіз: деталі по інтерфейсах при зміні статусу хоста') { options[:analyze] = true }
   opts.on('--analyze-accessibility-small', 'Компактний аналіз: тільки остання UP/DOWN по інтерфейсах') { options[:analyze_small] = true }
@@ -155,6 +157,82 @@ class ZabbixAPI
       sortfield: 'name'
     })
   end
+
+  # отримуємо останнє значення icmpping для хоста
+  def get_icmp_ping_status(hostid)
+    # Шукаємо item з key icmpping (або icmpping[*] — Zabbix іноді додає параметри)
+    items = rpc('item.get', {
+      hostids: hostid,
+      search: { key_: 'icmpping' },
+      output: ['itemid', 'lastvalue'],
+      limit: 1
+    })
+
+    return nil if items.empty? || items.first['lastvalue'].nil?
+
+    items.first['lastvalue'].to_i
+  end
+end
+
+def human_duration(seconds)
+  return "0 секунд" if seconds <= 0
+
+  parts = []
+
+  years = seconds / (365 * 24 * 3600)
+  if years > 0
+    parts << "#{years} #{Ukrainian.pluralize(years, 'рік', 'роки', 'років')}"
+    seconds %= (365 * 24 * 3600)
+  end
+
+  days = seconds / (24 * 3600)
+  if days > 0
+    parts << "#{days} #{Ukrainian.pluralize(days, 'день', 'дні', 'днів')}"
+    seconds %= (24 * 3600)
+  end
+
+  hours = seconds / 3600
+  if hours > 0
+    parts << "#{hours} #{Ukrainian.pluralize(hours, 'година', 'години', 'годин')}"
+    seconds %= 3600
+  end
+
+  minutes = seconds / 60
+  if minutes > 0
+    parts << "#{minutes} #{Ukrainian.pluralize(minutes, 'хвилина', 'хвилини', 'хвилин')}"
+    seconds %= 60
+  end
+
+  if seconds > 0
+    parts << "#{seconds} #{Ukrainian.pluralize(seconds, 'секунда', 'секунди', 'секунд')}"
+  end
+
+  # Прибираємо останні компоненти, якщо є більші
+  # Наприклад: не "2 дні 0 годин 0 хвилин", а просто "2 дні"
+  parts = parts.take_while { |p| p !~ /0 (годин|хвилин|секунд)/ }
+
+  case parts.size
+  when 0 then "0 секунд"
+  when 1 then parts.first
+  when 2 then parts.join(' ')
+  else
+    last = parts.pop
+    parts.join(', ') + " та #{last}"
+  end
+end
+
+# Допоміжний метод для правильного відмінювання (українська)
+module Ukrainian
+  def self.pluralize(n, one, few, many)
+    n = n.abs
+    if n % 10 == 1 && n % 100 != 11
+      one
+    elsif [2,3,4].include?(n % 10) && ![12,13,14].include?(n % 100)
+      few
+    else
+      many
+    end
+  end
 end
 
 # === Основна логіка ===
@@ -177,18 +255,32 @@ begin
   # === Хости (тільки ті, що моніторяться по SNMP) ===
   current_hosts.each do |zhost|
     name = zhost['host']
+    hostid = zhost['hostid']
     hardware = zhost.dig('inventory', 'hardware') || ''
 
     snmp_avail = zhost['snmp_available'].to_i
+    ping_value = api.get_icmp_ping_status(hostid)
 
     # Ігноруємо хости без SNMP моніторингу
     next if snmp_avail == 0
 
-    new_status = case snmp_avail
-                 when 1 then 'UP'
-                 when 2 then 'DOWN'
-                 else 'UNKNOWN'
-                 end
+    if options[:snmp_status]
+      new_status = case snmp_avail
+                   when 1 then 'UP'
+                   when 2 then 'DOWN'
+                   else 'UNKNOWN'
+                   end
+    else
+      new_status = case ping_value
+                   when 1 then 'UP'
+                   when 0 then 'DOWN'
+                   else 'UNKNOWN'
+                   end
+    end
+
+    unless options[:quiet]
+      puts "HOST  #{name.ljust(25)} => #{snmp_avail} #{ping_value} — #{new_status}  @ #{Time.at(now)}"
+    end
 
     # Додаємо/оновлюємо хост в БД
     db.execute("INSERT OR IGNORE INTO hosts (name, hardware) VALUES (?, ?)", [name, hardware])
@@ -237,7 +329,7 @@ begin
     prev = db.get_first_row("SELECT status FROM interface_status WHERE interface_id = ?", iface_id)
     prev_status = prev&.first
 
-    if prev_status != new_status
+    if options[:always_update] or prev_status != new_status
      # db.execute("INSERT OR REPLACE INTO interface_status (interface_id, timestamp, status) VALUES (?, ?, ?)", [iface_id, now, new_status])
       db.execute("UPDATE interface_status SET timestamp = ?, status = ? WHERE interface_id = ?", [now, new_status, iface_id])
       if db.changes == 0  # рядка ще не було (новий інтерфейс)
@@ -270,11 +362,19 @@ begin
 
       # АНАЛІЗ ТІЛЬКИ ПРИ ПАДІННІ (новий статус DOWN)
       if new_status == 'DOWN'
-        report_lines << "\n#{'=' * 80}"
-        report_lines << "АВАРІЯ: #{host_name} зміна статусу на DOWN об #{host_ts.strftime('%Y-%m-%d %H:%M:%S')}"
-        report_lines << "#{'=' * 80}"
+
         up_ts = db.get_first_value("SELECT MAX(timestamp) FROM event_log WHERE host_name = ? AND event_type = 'HOST_UP' AND timestamp < ?", [host_name, ch[:ts]])
         up_ts ||= 0 # якщо немає попереднього UP — показуємо всі зміни
+
+        duration_seconds = ch[:ts] - up_ts
+        duration_human = human_duration(duration_seconds)
+
+        report_lines << "\n#{'=' * 80}"
+        report_lines << "АВАРІЯ: #{host_name} — #{host_ts.strftime('%Y-%m-%d %H:%M:%S')} (!!! перевірка доступності по SNMP, не плутати з PING !!!)"
+        report_lines << "        Час безаварійної роботи: #{duration_human}"
+        report_lines << "        (з #{Time.at(up_ts).strftime('%Y-%m-%d %H:%M:%S')} по #{host_ts.strftime('%Y-%m-%d %H:%M:%S')})"
+        report_lines << "#{'=' * 80}"
+
         if options[:analyze_small]
           # Компактний аналіз — тільки остання UP та DOWN по інтерфейсах
           last_up = db.get_first_row(<<-SQL, [host_id, up_ts, ch[:ts]])
@@ -315,7 +415,7 @@ begin
         end
       else
         report_lines << "\n#{'=' * 80}"
-        report_lines << "ВІДНОВЛЕННЯ: #{host_name} зміна статусу на UP об #{host_ts.strftime('%Y-%m-%d %H:%M:%S')}"
+        report_lines << "ВІДНОВЛЕННЯ: #{host_name} — #{host_ts.strftime('%Y-%m-%d %H:%M:%S')}"
         report_lines << "#{'=' * 80}"
       end
       details = report_lines.join("\n")
