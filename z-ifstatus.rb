@@ -367,7 +367,7 @@ begin
         up_ts ||= 0 # якщо немає попереднього UP — показуємо всі зміни
 
         report_lines << "\n#{'=' * 80}"
-        report_lines << "АВАРІЯ: #{host_name} — #{host_ts.strftime('%Y-%m-%d %H:%M:%S')} (!!! перевірка доступності по SNMP, не плутати з PING !!!)"
+        report_lines << "АВАРІЯ: #{host_name} — #{host_ts.strftime('%Y-%m-%d %H:%M:%S')}"
 
         if up_ts == 0
           report_lines << "        Попередній стан UP не зафіксовано (перша аварія або очищений лог)"
