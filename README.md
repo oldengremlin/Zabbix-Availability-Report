@@ -116,6 +116,12 @@ chmod +x z-ifstatus.sh
 --------------------------------------------------------------------------------
 ```
 
+## Генерація RDoc
+
+```bash
+rdoc z-ifstatus.rb -o doc --title "Zabbix Availability Report" --main README.md
+```
+
 ## Безпека
 
 * Пароль передається через параметри або змінні оточення WHOAMI / WHATISMYPASSWD

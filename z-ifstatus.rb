@@ -1,4 +1,32 @@
 #!/usr/bin/env ruby
+# encoding: utf-8
+
+=begin
+= Zabbix Availability Report
+
+Ruby-скрипт для моніторингу доступності мережевих пристроїв у Zabbix.
+
+== Опис
+Скрипт відстежує статус хостів (за ICMP ping або SNMP) та інтерфейсів,
+фіксує зміни, проводить аналіз при аваріях і формує звіти на email.
+
+Запускається в cron кожні 5 хвилин, акумулює події та надсилає зведений звіт.
+
+== Особливості
+* Підтримка ICMP ping та SNMP як джерела статусу хоста
+* Аналіз інтерфейсів тільки при падінні (DOWN)
+* Розрахунок часу безаварійної роботи з людяним форматом (українською)
+* Звіти на email через +/usr/bin/mail+
+* Режими: повний та компактний аналіз
+* Запобігання паралельним запускам через +flock+ (рекомендовано)
+
+== Автор
+oldengremlin[](https://github.com/oldengremlin)
+
+== Ліцензія
+Apache License
+Version 2.0, January 2004
+=end
 
 require 'net/http'
 require 'uri'
@@ -8,9 +36,13 @@ require 'sqlite3'
 require 'fileutils'
 require 'time'
 
+# URL Zabbix API
 ZABBIX_URL = 'https://z.ukrhub.net/zabbix/api_jsonrpc.php'
+
+# URL Zabbix API
 DB_PATH = 'zabbix_status.db'
 
+# Парсер опцій командного рядка
 options = {}
 OptionParser.new do |opts|
   opts.banner = "Використання: #{$0} -u USER -p PASS [опції]"
@@ -36,6 +68,7 @@ OptionParser.new do |opts|
   end
 end.parse!
 
+# Валідація опцій
 if options[:analyze] && options[:analyze_small]
   warn "Помилка: --analyze-accessibility та --analyze-accessibility-small не можна разом"
   exit 1
@@ -46,6 +79,7 @@ if (options[:report] || options[:report_flush]) && !(options[:mail_to])
   exit 1
 end
 
+# Авторизація
 user     = options[:user]     || ENV['WHOAMI']
 password = options[:password] || ENV['WHATISMYPASSWD']
 db_path  = options[:db] || DB_PATH
@@ -55,7 +89,7 @@ unless user && password
   exit 1
 end
 
-# --since парсер
+# Парсер --since
 since_time = nil
 if options[:since]
   if options[:since] =~ /^(\d+)([mhd])$/
@@ -72,9 +106,11 @@ if options[:since]
   end
 end
 
-# === БД ===
+# === Підключення до БД ===
 FileUtils.mkdir_p(File.dirname(db_path)) if db_path.include?('/')
 db = SQLite3::Database.new(db_path)
+
+# Створення таблиць
 db.execute_batch <<-SQL
   CREATE TABLE IF NOT EXISTS hosts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,7 +147,11 @@ db.execute_batch <<-SQL
   CREATE INDEX IF NOT EXISTS idx_event_log_ts ON event_log(timestamp);
 SQL
 
+# == Клас для роботи з Zabbix API
 class ZabbixAPI
+  # @param url [String] URL Zabbix API
+  # @param user [String] Логін
+  # @param password [String] Пароль
   def initialize(url, user, password)
     @uri = URI(url)
     @user = user
@@ -120,6 +160,12 @@ class ZabbixAPI
     @id = 1
   end
 
+  private
+
+  # Виконує JSON-RPC запит
+  # @param method [String] Метод API
+  # @param params [Hash] Параметри
+  # @return [Object] Результат
   def rpc(method, params = {})
     payload = { jsonrpc: '2.0', method: method, params: params, id: (@id += 1) }
     payload[:auth] = @auth if @auth
@@ -138,10 +184,15 @@ class ZabbixAPI
     json['result']
   end
 
+  public
+
+  # Авторизація в Zabbix
   def login
     @auth = rpc('user.login', user: @user, password: @password)
   end
 
+  # Отримує список хостів з snmp_available
+  # @return [Array<Hash>]
   def get_current_hosts
     rpc('host.get', {
       output: %w[host name hostid snmp_available],
@@ -149,6 +200,7 @@ class ZabbixAPI
     })
   end
 
+  # Отримує елементи Operational status інтерфейсів
   def get_current_interface_items
     rpc('item.get', {
       output: %w[name lastvalue hostid],
@@ -158,7 +210,9 @@ class ZabbixAPI
     })
   end
 
-  # отримуємо останнє значення icmpping для хоста
+  # Отримує останнє значення icmpping для хоста
+  # @param hostid [String] ID хоста в Zabbix
+  # @return [Integer, nil] 1 = UP, 0 = DOWN, nil = немає даних
   def get_icmp_ping_status(hostid)
     # Шукаємо item з key icmpping (або icmpping[*] — Zabbix іноді додає параметри)
     items = rpc('item.get', {
@@ -174,6 +228,11 @@ class ZabbixAPI
   end
 end
 
+# == Допоміжні методи ==
+
+# Форматує тривалість у людяному вигляді українською
+# @param seconds [Integer] Кількість секунд
+# @return [String] Наприклад: "2 дні 6 годин 14 хвилин"
 def human_duration(seconds)
   return "0 секунд" if seconds <= 0
 
@@ -221,8 +280,8 @@ def human_duration(seconds)
   end
 end
 
-# Допоміжний метод для правильного відмінювання (українська)
 module Ukrainian
+  # Правильне відмінювання числівників українською
   def self.pluralize(n, one, few, many)
     n = n.abs
     if n % 10 == 1 && n % 100 != 11
