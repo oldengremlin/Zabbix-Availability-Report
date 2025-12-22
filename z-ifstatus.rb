@@ -366,13 +366,18 @@ begin
         up_ts = db.get_first_value("SELECT MAX(timestamp) FROM event_log WHERE host_name = ? AND event_type = 'HOST_UP' AND timestamp < ?", [host_name, ch[:ts]])
         up_ts ||= 0 # якщо немає попереднього UP — показуємо всі зміни
 
-        duration_seconds = ch[:ts] - up_ts
-        duration_human = human_duration(duration_seconds)
-
         report_lines << "\n#{'=' * 80}"
         report_lines << "АВАРІЯ: #{host_name} — #{host_ts.strftime('%Y-%m-%d %H:%M:%S')} (!!! перевірка доступності по SNMP, не плутати з PING !!!)"
-        report_lines << "        Час безаварійної роботи: #{duration_human}"
-        report_lines << "        (з #{Time.at(up_ts).strftime('%Y-%m-%d %H:%M:%S')} по #{host_ts.strftime('%Y-%m-%d %H:%M:%S')})"
+
+        if up_ts == 0
+          report_lines << "        Попередній стан UP не зафіксовано (перша аварія або очищений лог)"
+        else
+          duration_seconds = ch[:ts] - up_ts
+          duration_human = human_duration(duration_seconds)
+          report_lines << "        Час безаварійної роботи: #{duration_human}"
+          report_lines << "        (з #{Time.at(up_ts).strftime('%Y-%m-%d %H:%M:%S')} по #{host_ts.strftime('%Y-%m-%d %H:%M:%S')})"
+        end
+
         report_lines << "#{'=' * 80}"
 
         if options[:analyze_small]
