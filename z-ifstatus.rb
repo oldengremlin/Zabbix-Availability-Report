@@ -474,7 +474,7 @@ begin
             count += 1
             report_lines << " #{row[2]} → #{row[1].ljust(6)} | #{row[0]}"
           end
-          report_lines << " (показано #{count} змін)" if count > 0
+          report_lines << " (показано #{count} #{Ukrainian.pluralize(count, 'зміна', 'зміни', 'змін')})" if count > 0
           report_lines << " (немає змін у цьому інтервалі)" if count == 0
         end
       else
