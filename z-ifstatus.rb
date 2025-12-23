@@ -21,7 +21,7 @@ Ruby-скрипт для моніторингу доступності мере�
 * Запобігання паралельним запускам через +flock+ (рекомендовано)
 
 == Автор
-oldengremlin[](https://github.com/oldengremlin)
+oldengremlin<a href="https://github.com/oldengremlin" target="_blank" rel="noopener noreferrer nofollow"></a>
 
 == Ліцензія
 Apache License
@@ -39,7 +39,7 @@ require 'time'
 # URL Zabbix API
 ZABBIX_URL = 'https://z.ukrhub.net/zabbix/api_jsonrpc.php'
 
-# URL Zabbix API
+# Шлях до файлу бази даних SQLite
 DB_PATH = 'zabbix_status.db'
 
 # Парсер опцій командного рядка
@@ -62,6 +62,9 @@ OptionParser.new do |opts|
   opts.on('--mail-from EMAIL', 'Від кого (From)') { |e| options[:mail_from] = e }
   opts.on('--mail-to EMAIL', 'Кому (To)') { |e| options[:mail_to] = e }
   opts.on('--mail-replyto EMAIL', 'Reply-To') { |e| options[:mail_replyto] = e }
+  opts.on('--zabbix-interface-history [N]', Integer, 'Додати історію змін інтерфейсів з Zabbix (N подій, за замовч. 20)') do |n|
+    options[:zabbix_history_count] = n || 20
+  end
   opts.on('-h', '--help', 'Допомога') do
     puts opts
     exit
@@ -360,7 +363,7 @@ begin
         db.execute("INSERT INTO host_status (host_id, timestamp, status) VALUES (?, ?, ?)", [host_id, now, new_status])
       end
       host_changes += 1
-      changed_hosts << { name: name, host_id: host_id, old: prev_status, new: new_status, ts: now }
+      changed_hosts << { name: name, host_id: host_id, zabbix_hostid: hostid, old: prev_status, new: new_status, ts: now }
 
       unless options[:quiet]
         change = prev_status ? "(#{prev_status} → #{new_status})" : "(новий)"
@@ -404,10 +407,11 @@ begin
   end
 
   # === Аналіз доступності ===
-  if options[:analyze] || options[:analyze_small]
+  if options[:analyze] || options[:analyze_small] || options[:zabbix_history_count]
     changed_hosts.each do |ch|
       host_name = ch[:name]
       host_id = ch[:host_id]
+      zabbix_hostid = ch[:zabbix_hostid]
       host_ts = Time.at(ch[:ts])
       old_status = ch[:old]
       new_status = ch[:new]
@@ -421,9 +425,17 @@ begin
 
       # АНАЛІЗ ТІЛЬКИ ПРИ ПАДІННІ (новий статус DOWN)
       if new_status == 'DOWN'
-
-        up_ts = db.get_first_value("SELECT MAX(timestamp) FROM event_log WHERE host_name = ? AND event_type = 'HOST_UP' AND timestamp < ?", [host_name, ch[:ts]])
-        up_ts ||= 0 # якщо немає попереднього UP — показуємо всі зміни
+        # Шукаємо останній UP спочатку в event_log, потім в host_status
+        up_ts = db.get_first_value(
+          "SELECT MAX(timestamp) FROM event_log WHERE host_name = ? AND event_type = 'HOST_UP' AND timestamp < ?",
+          [host_name, ch[:ts]]
+        ) || 0
+        if !up_ts || up_ts == 0
+          up_ts = db.get_first_value(
+            "SELECT timestamp FROM host_status JOIN hosts ON host_status.host_id = hosts.id WHERE hosts.name = ? AND status = 'UP'",
+            [host_name]
+          ) || 0
+        end
 
         report_lines << "\n#{'=' * 80}"
         report_lines << "АВАРІЯ: #{host_name} — #{host_ts.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -457,7 +469,7 @@ begin
           SQL
           report_lines << "Остання UP зміна: #{last_up ? "#{last_up[0]} о #{last_up[1]}" : 'немає даних'}"
           report_lines << "Остання DOWN зміна: #{last_down ? "#{last_down[0]} о #{last_down[1]}" : 'немає даних'}"
-        else
+        elsif options[:analyze]
           # Повний аналіз — зміни інтерфейсів між UP і DOWN
           report_lines << "Зміни на інтерфейсах між останнім UP та DOWN (від свіжих до старих):"
           report_lines << " Час останньої зміни → Статус | Інтерфейс"
@@ -474,12 +486,62 @@ begin
             count += 1
             report_lines << " #{row[2]} → #{row[1].ljust(6)} | #{row[0]}"
           end
+
           report_lines << " (показано #{count} #{Ukrainian.pluralize(count, 'зміну', 'зміни', 'змін')})" if count > 0
           report_lines << " (немає змін у цьому інтервалі)" if count == 0
         end
+
+        if options[:zabbix_history_count]
+          report_lines << "Останні зміни інтерфейсів з історії Zabbix (до #{options[:zabbix_history_count]} подій):"
+          report_lines << " Час → Статус | Інтерфейс"
+          report_lines << " #{'-' * 77}"
+
+          iface_items = api.rpc('item.get', {
+            hostids: ch[:zabbix_hostid],
+            search: { name: '*Operational status*' },
+            output: ['itemid', 'name'],
+            sortfield: 'name'
+          })
+
+          count = 0
+          iface_items.each do |item|
+            itemid = item['itemid']
+            iface_name = item['name'].sub(/:?\s*Operational status.*$/i, '').strip
+
+            history = api.rpc('history.get', {
+              itemids: [itemid],
+              history: 3,  # integer
+              sortfield: 'clock',
+              sortorder: 'DESC',
+              limit: options[:zabbix_history_count]
+            })
+
+            history.each do |h|
+              h_time = Time.at(h['clock'].to_i)
+              h_status = h['value'].to_i == 1 ? 'UP' : 'DOWN'
+              report_lines << " #{h_time.strftime('%Y-%m-%d %H:%M:%S')} → #{h_status.ljust(6)} | #{iface_name}"
+              count += 1
+              break if count >= options[:zabbix_history_count]
+            end
+            break if count >= options[:zabbix_history_count]
+          end
+
+          report_lines << " (показано #{count} подій з історії Zabbix)" if count > 0
+          report_lines << " (немає історії в Zabbix)" if count == 0
+        end
+
       else
-        down_ts = db.get_first_value("SELECT MAX(timestamp) FROM event_log WHERE host_name = ? AND event_type = 'HOST_DOWN' AND timestamp < ?", [host_name, ch[:ts]])
-        down_ts ||= 0 # якщо немає попереднього UP — показуємо всі зміни
+        # Шукаємо останній DOWN
+        down_ts = db.get_first_value(
+          "SELECT MAX(timestamp) FROM event_log WHERE host_name = ? AND event_type = 'HOST_DOWN' AND timestamp < ?",
+          [host_name, ch[:ts]]
+        ) || 0
+        if !down_ts || down_ts == 0
+          down_ts = db.get_first_value(
+            "SELECT timestamp FROM host_status JOIN hosts ON host_status.host_id = hosts.id WHERE hosts.name = ? AND status = 'DOWN'",
+            [host_name]
+          ) || 0
+        end
 
         report_lines << "\n#{'=' * 80}"
         report_lines << "ВІДНОВЛЕННЯ: #{host_name} — #{host_ts.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -495,11 +557,13 @@ begin
 
         report_lines << "#{'=' * 80}"
       end
+
       details = report_lines.join("\n")
       db.execute("INSERT INTO event_log (timestamp, host_name, event_type, details) VALUES (?, ?, ?, ?)", [ch[:ts], host_name, event_type, details])
       unless options[:quiet]
         puts details
       end
+
     end
   else
     unless options[:quiet]
