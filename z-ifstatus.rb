@@ -163,8 +163,6 @@ class ZabbixAPI
     @id = 1
   end
 
-  private
-
   # Виконує JSON-RPC запит
   # @param method [String] Метод API
   # @param params [Hash] Параметри
@@ -186,8 +184,6 @@ class ZabbixAPI
     raise json['error']['data'] if json['error']
     json['result']
   end
-
-  public
 
   # Авторизація в Zabbix
   def login
