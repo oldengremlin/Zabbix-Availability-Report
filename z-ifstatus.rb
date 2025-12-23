@@ -488,42 +488,44 @@ begin
         end
 
         if options[:zabbix_history_count]
-          report_lines << "Останні зміни інтерфейсів з історії Zabbix (до #{options[:zabbix_history_count]} подій):"
-          report_lines << " Час → Статус | Інтерфейс"
-          report_lines << " #{'-' * 77}"
+          report_lines << "\nОстанні проблеми з інтерфейсами (Link down) з історії Zabbix (до #{options[:zabbix_history_count]} подій):"
+          report_lines << " Час                 → Статус               | Опис проблеми"
+          report_lines << " #{'-' * 90}"
 
-          iface_items = api.rpc('item.get', {
-            hostids: ch[:zabbix_hostid],
-            search: { name: '*Operational status*' },
-            output: ['itemid', 'name'],
-            sortfield: 'name'
+          problems = api.rpc('problem.get', {
+            output: 'extend',
+            selectAcknowledges: 'extend',
+            selectTags: 'extend',
+            hostids: [ch[:zabbix_hostid]],
+            filter: { show: 2 },
+            recent: true,                    # включає вирішені
+            sortfield: [ 'eventid' ],
+            sortorder: 'DESC',
+            limit: options[:zabbix_history_count],
+            search: { name: ': Link down' }  # точний фільтр, як у тебе
           })
 
           count = 0
-          iface_items.each do |item|
-            itemid = item['itemid']
-            iface_name = item['name'].sub(/:?\s*Operational status.*$/i, '').strip
+          problems.each do |p|
+            event_time = Time.at(p['clock'].to_i)
+            name = p['name']
 
-            history = api.rpc('history.get', {
-              itemids: [itemid],
-              history: 3,  # integer
-              sortfield: 'clock',
-              sortorder: 'DESC',
-              limit: options[:zabbix_history_count]
-            })
-
-            history.each do |h|
-              h_time = Time.at(h['clock'].to_i)
-              h_status = h['value'].to_i == 1 ? 'UP' : 'DOWN'
-              report_lines << " #{h_time.strftime('%Y-%m-%d %H:%M:%S')} → #{h_status.ljust(6)} | #{iface_name}"
-              count += 1
-              break if count >= options[:zabbix_history_count]
+            if p['r_eventid'].to_i == 0
+              status = 'ACTIVE'  # ще триває
+            else
+              recovery_time = Time.at(p['r_clock'].to_i)
+              status = "RESOLVED (#{recovery_time.strftime('%H:%M:%S')})"
             end
-            break if count >= options[:zabbix_history_count]
+
+            report_lines << " #{event_time.strftime('%Y-%m-%d %H:%M:%S')} → #{status.ljust(20)} | #{name}"
+            count += 1
           end
 
-          report_lines << " (показано #{count} подій з історії Zabbix)" if count > 0
-          report_lines << " (немає історії в Zabbix)" if count == 0
+          if count == 0
+            report_lines << " (немає проблем типу 'Link down' в історії Zabbix)"
+          else
+            report_lines << " (показано #{count} проблем з історії Zabbix)"
+          end
         end
 
       else
