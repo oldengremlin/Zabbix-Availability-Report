@@ -490,14 +490,14 @@ begin
         if options[:zabbix_history_count]
           report_lines << "\nОстанні проблеми з інтерфейсами (Link down) з історії Zabbix (до #{options[:zabbix_history_count]} подій):"
           report_lines << " Час                 → Статус               | Опис проблеми"
-          report_lines << " #{'-' * 90}"
+          report_lines << " #{'-' * 80}"
 
           problems = api.rpc('problem.get', {
             output: 'extend',
             selectAcknowledges: 'extend',
             selectTags: 'extend',
             hostids: [ch[:zabbix_hostid]],
-            filter: { show: 2 },
+#            filter: { show: 2 },
             recent: true,                    # включає вирішені
             sortfield: [ 'eventid' ],
             sortorder: 'DESC',
@@ -511,10 +511,10 @@ begin
             name = p['name']
 
             if p['r_eventid'].to_i == 0
-              status = 'ACTIVE'  # ще триває
+              status = 'LINK DOWN'  # ще триває
             else
               recovery_time = Time.at(p['r_clock'].to_i)
-              status = "RESOLVED (#{recovery_time.strftime('%H:%M:%S')})"
+              status = "LINK UP (#{recovery_time.strftime('%H:%M:%S')})"
             end
 
             report_lines << " #{event_time.strftime('%Y-%m-%d %H:%M:%S')} → #{status.ljust(20)} | #{name}"
