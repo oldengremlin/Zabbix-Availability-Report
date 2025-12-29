@@ -480,7 +480,7 @@ begin
             LIMIT 30
           SQL
             count += 1
-            report_lines << " #{row[2]} → #{row[1].ljust(6)} | #{row[0]}"
+            report_lines << " #{row[2]} → #{row[1].ljust(10)} | #{row[0]}"
           end
 
           report_lines << " (показано #{count} #{Ukrainian.pluralize(count, 'зміну', 'зміни', 'змін')})" if count > 0
@@ -584,7 +584,9 @@ begin
       puts "Немає подій для звіту." unless options[:quiet]
       exit 0
     end
+
     report = []
+
     report << "Звіт про доступність мережі"
     report << "Період: #{Time.at(events.first[0]).strftime('%Y-%m-%d %H:%M')} — #{Time.at(events.last[0]).strftime('%Y-%m-%d %H:%M')}"
     # report << ""
@@ -599,6 +601,7 @@ begin
     subject = "Zabbix Availability Report — #{Time.now.strftime('%Y-%m-%d')}"
     cmd = %w[/usr/bin/mail -s]
     cmd << subject
+    cmd << "-a" << 'Content-Type: text/plain; charset="UTF-8"'
     cmd << "-r" << options[:mail_from] if options[:mail_from]
     cmd << "-r" << options[:mail_replyto] if options[:mail_replyto]
     cmd << options[:mail_to]
