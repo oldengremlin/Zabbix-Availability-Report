@@ -54,6 +54,7 @@ OptionParser.new do |opts|
   opts.on('--show-diff-count', 'Показати кількість змін у підсумку') { options[:diff_count] = true }
   opts.on('--always-update', 'Завжди оновлювати timestamp інтерфейсів (навіть без зміни статусу)') { options[:always_update] = true }
   opts.on('--snmp-status', 'Використовувати SNMP-доступність замість ICMP для статусу хоста') { options[:snmp_status] = true }
+  opts.on('--down-if-up', 'При падінні хоста оновлювати timestamp всіх інтерфейсів на час падіння') { options[:down_if_up] = true }
   opts.on('--quiet', 'Тихий режим: мінімальний вивід') { options[:quiet] = true }
   opts.on('--analyze-accessibility', 'Аналіз: деталі по інтерфейсах при зміні статусу хоста') { options[:analyze] = true }
   opts.on('--analyze-accessibility-small', 'Компактний аналіз: тільки остання UP/DOWN по інтерфейсах') { options[:analyze_small] = true }
@@ -527,6 +528,17 @@ begin
             report_lines << " (показано #{count} проблем з історії Zabbix)"
           end
         end
+
+        # === down-if-up ===
+        if options[:down_if_up]
+          db.execute(<<-SQL, [ch[:ts], host_id])
+            UPDATE interface_status
+            SET status = 'DOWN', timestamp = ?
+            WHERE interface_id IN (SELECT id FROM interfaces WHERE host_id = ?)
+          SQL
+          puts "При падінні #{host_name} всі інтерфейси примусово переведено в DOWN (timestamp = #{Time.at(now)})" unless options[:quiet]
+        end
+        # === кінець нової функції ===
 
       else
         # Шукаємо останній DOWN
